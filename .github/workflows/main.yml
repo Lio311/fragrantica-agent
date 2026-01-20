@@ -1,0 +1,44 @@
+name: Fragrantica Scraper Bot
+
+on:
+  schedule:
+    # מריץ את הבוט כל שעה עגולה (דקה 0)
+    - cron: '0 * * * *'
+  # מאפשר לך להריץ ידנית לצורך בדיקות
+  workflow_dispatch:
+
+permissions:
+  contents: write # נותן לבוט אישור לשמור שינויים בקוד (בשביל קובץ הטקסט)
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Scraper Script
+        env: # כאן אנחנו מעבירים את הסודות לקוד
+          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+          API_KEY: ${{ secrets.API_KEY }}
+        run: python perfume_bot.py
+
+      - name: Commit and Push changes
+        # השלב הזה שומר את קובץ הטקסט המעודכן בחזרה לגיטהאב
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          git add last_seen_perfume.txt
+          # אם יש שינוי (בושם חדש) - הוא ישמור אותו. אם לא - הוא לא ייכשל.
+          git commit -m "Update last seen perfume" || echo "No changes to commit"
+          git push
