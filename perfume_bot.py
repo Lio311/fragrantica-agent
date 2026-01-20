@@ -1,5 +1,5 @@
 import os
-import requests
+from curl_cffi import requests # שים לב לשינוי כאן!
 from bs4 import BeautifulSoup
 import sys
 
@@ -7,52 +7,38 @@ import sys
 NEWS_URL = "https://www.fragrantica.com/news/new-fragrances/"
 LAST_SEEN_FILE = "last_seen_perfume.txt"
 
-# כותרות דפדפן (חובה למניעת חסימה)
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.google.com/"
-}
-
-# --- שליפת מפתחות Pushover משתני הסביבה ---
-# שים לב: שיניתי את השמות שיתאימו ל-Pushover
+# --- שליפת מפתחות Pushover ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 
 def send_pushover_notification(title, message, url_link=None):
-    """שולח התראה לטלפון באמצעות Pushover"""
-    
     if not PUSHOVER_USER_KEY or not PUSHOVER_API_TOKEN:
-        print("❌ שגיאה: חסרים מפתחות Pushover (USER_KEY או API_TOKEN).")
+        print("❌ שגיאה: חסרים מפתחות Pushover.")
         return
 
-    # הכתובת של ה-API
     endpoint = "https://api.pushover.net/1/messages.json"
     
-    # בניית הפיילאוד (המידע שנשלח)
     payload = {
-        "token": PUSHOVER_API_TOKEN,  # המפתח של האפליקציה שיצרת
-        "user": PUSHOVER_USER_KEY,    # המפתח האישי שלך
+        "token": PUSHOVER_API_TOKEN,
+        "user": PUSHOVER_USER_KEY,
         "title": title,
         "message": message,
-        "html": 1,                    # מאפשר עיצוב HTML כמו <b>
-        "sound": "cosmic",            # צליל מגניב (אפשר לשנות ל-pushover, bike, etc)
-        "priority": 0                 # עדיפות רגילה
+        "html": 1,
+        "sound": "cosmic",
+        "priority": 0
     }
 
-    # אם יש לינק, נוסיף אותו כשדה ייעודי (יותר נוח ללחיצה בהתראה)
     if url_link:
         payload["url"] = url_link
         payload["url_title"] = "👉 לחץ למעבר לכתבה"
 
     try:
+        # Pushover לא דורש עקיפות מיוחדות, אפשר להשתמש ב-requests הרגיל או החדש
         response = requests.post(endpoint, data=payload, timeout=10)
-        
         if response.status_code == 200:
-            print("✅ התראת Pushover נשלחה בהצלחה!")
+            print("✅ התראת Pushover נשלחה!")
         else:
             print(f"❌ שגיאה בשליחת Pushover: {response.text}")
-            
     except Exception as e:
         print(f"❌ שגיאה בחיבור ל-Pushover: {e}")
 
@@ -82,42 +68,44 @@ def get_latest_article(soup):
     return None
 
 def main():
-    print("🚀 הבוט מתחיל בסריקת Fragrantica (Pushover Edition)...")
+    print("🚀 הבוט מתחיל בסריקה (TLS Impersonation Mode)...")
     
     try:
-        response = requests.get(NEWS_URL, headers=HEADERS, timeout=15)
-        response.raise_for_status()
+        # --- השינוי הגדול: התחזות לדפדפן כרום אמיתי ---
+        # impersonate="chrome" גורם לבקשה להיראות זהה ב-100% לדפדפן כרום
+        response = requests.get(NEWS_URL, impersonate="chrome", timeout=20)
+        
+        # אם עדיין מקבלים 403, ננסה להתחזות לספארי (לפעמים עובד טוב יותר)
+        if response.status_code == 403:
+            print("⚠️ ניסיון ראשון נחסם. מנסה להתחזות ל-Safari...")
+            response = requests.get(NEWS_URL, impersonate="safari", timeout=20)
+
+        if response.status_code != 200:
+            print(f"❌ שגיאה סופית בגישה לאתר: {response.status_code}")
+            sys.exit(1)
         
         soup = BeautifulSoup(response.text, 'html.parser')
         latest_item = get_latest_article(soup)
         
         if not latest_item:
-            print("⚠️ לא נמצאו כתבות.")
+            print("⚠️ לא נמצאו כתבות (אולי המבנה השתנה, או שנחסמנו בצורה שקטה).")
             return
 
         latest_title = latest_item['title']
         latest_link = latest_item['link']
         
-        print(f"👀 כתבה אחרונה: {latest_title}")
+        print(f"👀 כתבה אחרונה שנמצאה: {latest_title}")
         
         last_seen = get_last_seen_link()
         
         if latest_link != last_seen:
-            print("✨ זיהוי חדש! שולח Pushover...")
-            
-            # הכנת הטקסט להודעה
-            msg_body = (
-                f"נמצא בושם/כתבה חדשה באתר:<br>"
-                f"<b>{latest_title}</b>"
-            )
-            
-            # שליחה
+            print("✨ זיהוי חדש! שולח התראה...")
+            msg_body = f"נמצא בושם/כתבה חדשה באתר:<br><b>{latest_title}</b>"
             send_pushover_notification(
                 title="🧴 בושם חדש ב-Fragrantica!",
                 message=msg_body,
                 url_link=latest_link
             )
-            
             save_last_seen_link(latest_link)
         else:
             print("😴 אין חדש.")
