@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 HOMEPAGE_URL = "https://www.fragrantica.com/"
 
 # רשימת מילים לסינון (למקרה שהלוגיקה החדשה תפספס)
-INVALID_BRANDS = ["Latest Reviews", "New Reviews", "Fragrantica", "News", "Community"]
+INVALID_BRANDS = ["Latest Reviews", "New Reviews", "Fragrantica", "News", "Community", "Art Books Events"]
 
 # --- משתני סביבה ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
@@ -19,7 +19,7 @@ PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def save_to_neon(name, link, image_url):
-    """שומר את הבושם ב-Neon DB (ללא שמירת מותג)"""
+    """שומר את הבושם ב-Neon DB"""
     if not DATABASE_URL:
         print("⚠️ לא הוגדר DATABASE_URL.")
         return
@@ -98,34 +98,45 @@ def check_db_exists(link):
 
 def get_perfumes_list(soup):
     """
-    סורק את העמוד ומחזיר רשימה של בשמים - ממוקד רק באזור New Perfumes
+    סורק את העמוד ומחזיר רשימה של בשמים - לוגיקה חכמה למציאת הקרוסלה
     """
     perfumes_found = []
     seen_links = set()
 
     try:
-        # --- שלב 1: מציאת האזור הנכון בעמוד ---
-        # חיפוש מדויק לפי מה שראינו בתמונה שלך: "New Perfumes"
         target_section = None
         
+        # חיפוש הכותרת המתאימה
         headers = soup.find_all(['h4', 'h3', 'h2', 'div', 'span'])
         for h in headers:
             text = h.get_text(strip=True)
-            # חיפוש גמיש: גם "New Perfumes" וגם "New Fragrances" ליתר ביטחון
             if text and ("New Perfumes" in text or "New Fragrances" in text):
-                # מצאנו את הכותרת! עכשיו מחפשים את ה-div שבא אחריה (הקרוסלה)
-                target_section = h.find_next("div")
-                print(f"🎯 נמצאה הכותרת: '{text}' - מתמקד באזור הזה בלבד.")
-                break
+                print(f"🎯 נמצאה הכותרת: '{text}'")
+                
+                # --- התיקון הגדול כאן ---
+                # במקום לקחת את ה-div הראשון (שעלול להיות ריק), אנחנו בודקים את ה-5 הבאים
+                # ומחפשים את הראשון שמכיל לינקים עם המילה perfume
+                
+                potential_divs = h.find_all_next("div", limit=5)
+                
+                for div in potential_divs:
+                    # בדיקה מהירה: האם יש בתוך ה-div הזה לינק לבושם?
+                    if div.find("a", href=lambda x: x and '/perfume/' in x):
+                        target_section = div
+                        print("✅ נמצא קונטיינר שמכיל בשמים!")
+                        break
+                
+                if target_section:
+                    break
         
+        # אם עדיין לא מצאנו כלום, חוזרים לסריקה כללית כברירת מחדל (Fallback)
         if not target_section:
-            print("⚠️ לא נמצאה כותרת 'New Perfumes'. סורק את כל העמוד בזהירות.")
-            search_area = soup
-        else:
-            search_area = target_section
+            print("⚠️ לא נמצא קונטיינר צמוד לכותרת. מנסה לסרוק את האזור הכללי.")
+            # מנסה למצוא את האזור הכללי של הכותרת הראשית כגיבוי
+            target_section = soup
 
-        # --- שלב 2: איסוף הלינקים מהאזור הממוקד בלבד ---
-        candidates = search_area.find_all("a", href=True)
+        # --- איסוף הלינקים ---
+        candidates = target_section.find_all("a", href=True)
         
         for link in candidates:
             href = link['href']
@@ -137,11 +148,9 @@ def get_perfumes_list(soup):
                 if full_link in seen_links:
                     continue
 
-                # חילוץ תמונה
                 img_tag = link.find("img")
                 image_url = img_tag['src'] if img_tag else None
                 
-                # חילוץ שם
                 perfume_name = ""
                 if img_tag and img_tag.get('alt'):
                     perfume_name = img_tag['alt']
@@ -151,7 +160,6 @@ def get_perfumes_list(soup):
                 if perfume_name.lower().startswith("perfume"):
                     perfume_name = perfume_name[7:].strip()
 
-                # חילוץ מותג
                 brand_name = ""
                 parent_cell = link.find_parent("div")
                 if parent_cell:
@@ -163,13 +171,12 @@ def get_perfumes_list(soup):
                         if prev_link and '/designers/' in prev_link.get('href', ''):
                             brand_name = prev_link.get_text(strip=True)
                 
-                # הגנה נוספת: אם בטעות גלשנו לביקורות
+                # הגנות מביקורות
                 if brand_name in INVALID_BRANDS:
                     continue 
-                if brand_name.lower().startswith("by "): # מזהה שמות של משתמשים שכתבו ביקורת
+                if brand_name.lower().startswith("by "): 
                     continue
 
-                # ניקוי כפילות שם
                 if brand_name and perfume_name.lower().startswith(brand_name.lower()):
                     perfume_name = perfume_name[len(brand_name):].strip()
 
@@ -197,7 +204,7 @@ def main():
     print(f"⏳ ממתין {sleep_seconds} שניות...")
     time.sleep(sleep_seconds)
     
-    print("🚀 מתחיל סריקה (ממוקדת New Perfumes)...")
+    print("🚀 מתחיל סריקה (ממוקדת וחכמה)...")
     
     try:
         response = cffi_requests.get(HOMEPAGE_URL, impersonate="chrome", timeout=20)
