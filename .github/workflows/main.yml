@@ -2,13 +2,15 @@ name: Fragrantica Pushover Bot
 
 on:
   schedule:
-    # מריץ כל שעה עגולה
+    # מריץ את הבוט כל שעה עגולה (למשל 14:00, 15:00...)
+    # ההמתנה הרנדומלית בקוד הפייתון תדאג שהגישה לאתר לא תהיה בדיוק ב-:00
     - cron: '0 * * * *'
-  # מאפשר הרצה ידנית בלחיצת כפתור לבדיקה
+  
+  # מאפשר הרצה ידנית לצורך בדיקות
   workflow_dispatch:
 
 permissions:
-  contents: write # חובה בשביל לשמור את ההיסטוריה
+  contents: write # חובה כדי לשמור את השינויים בגיט
 
 jobs:
   run-bot:
@@ -29,17 +31,23 @@ jobs:
 
       - name: Run Scraper Script
         env:
-          # כאן אנחנו מעבירים את המפתחות של Pushover לקוד
+          # משתני Pushover
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          
+          # משתנה בסיס הנתונים (התיקון החשוב!)
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        
         run: python perfume_bot.py
 
       - name: Commit and Push changes
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
-          # בודק אם נוצר או עודכן קובץ ההיסטוריה
+          
+          # מוריד שינויים מהשרת לפני שדוחף (מונע התנגשויות)
+          git pull --rebase origin main
+          
           git add last_seen_perfume.txt
-          # שומר רק אם היה שינוי
           git commit -m "Update last seen perfume" || echo "No changes to commit"
           git push
