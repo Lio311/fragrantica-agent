@@ -2,10 +2,8 @@ name: Fragrantica Pushover Bot
 
 on:
   schedule:
-    # מריץ את הבוט כל שעה עגולה
     - cron: '0 */9 * * *' 
   
-  # מאפשר הרצה ידנית
   workflow_dispatch:
 
 jobs:
@@ -33,4 +31,3 @@ jobs:
         
         run: python perfume_bot.py
       
-      # מחקנו מכאן את שלב ה-Commit and Push כי הכל נשמר ב-Neon DB!
