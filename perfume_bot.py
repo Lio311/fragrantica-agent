@@ -5,7 +5,6 @@ import sys
 import re
 
 # --- הגדרות ---
-# סורקים את עמוד הבית, שם נמצאת הקרוסלה מהתמונה ששלחת
 HOMEPAGE_URL = "https://www.fragrantica.com/"
 LAST_SEEN_FILE = "last_seen_perfume.txt"
 
@@ -50,53 +49,47 @@ def save_last_seen_link(link):
     with open(LAST_SEEN_FILE, "w", encoding="utf-8") as f:
         f.write(link)
 
-def get_newest_perfume_from_homepage(soup):
+def get_first_perfume_on_page(soup):
     """
-    מחפש את האזור "New Perfumes" בעמוד הבית ושולף את הבושם הראשון משמאל.
+    במקום לחפש כותרות, פשוט שולף את הלינק התקין הראשון לבושם שנמצא בעמוד.
+    בפרגרנטיקה, הלינקים הראשונים בקוד הם תמיד מהקרוסלה של החדשים.
     """
     try:
-        # 1. חיפוש הכותרת "New Perfumes"
-        # אנחנו מחפשים אלמנט שמכיל את הטקסט הזה
-        header = soup.find(lambda tag: tag.name in ["h2", "h3", "h4", "h5", "div"] and "New Perfumes" in tag.text)
+        # מחפש את כל הלינקים בעמוד שמכילים /perfume/
+        # ומסנן כתבות (/news/) או דפי חיפוש
+        candidates = soup.find_all("a", href=True)
         
-        if not header:
-            print("⚠️ לא נמצאה הכותרת 'New Perfumes' בעמוד.")
-            return None
+        print(f"🔍 נמצאו {len(candidates)} לינקים בעמוד. מסנן...")
 
-        # 2. מציאת הקונטיינר הסמוך לכותרת (שם נמצאים הבשמים)
-        # בדרך כלל הקרוסלה נמצאת ב-div שאחרי הכותרת או בתוך אותו קונטיינר אב
-        # ננסה למצוא את הלינק לבושם הראשון שמופיע אחרי הכותרת
-        
-        # אוספים את כל הלינקים שמופיעים *אחרי* הכותרת בקוד
-        all_links_after = header.find_all_next("a", href=True)
-        
-        for link in all_links_after[:20]: # בודקים רק את ה-20 הראשונים כדי לא להרחיק לכת
+        for link in candidates:
             href = link['href']
             
-            # בדיקה שזה לינק לבושם (מכיל /perfume/ ומסתיים ב-.html)
-            # וגם מוודאים שזה לא לינק לכתבה (/news/)
-            if '/perfume/' in href and '.html' in href and '/news/' not in href:
+            # תנאי סינון קפדניים:
+            # 1. חייב להיות לינק לבושם
+            # 2. חייב להסתיים ב-.html
+            # 3. אסור שיהיה לינק לכתבה
+            # 4. אסור שיהיה לינק למותג (designers)
+            if '/perfume/' in href and '.html' in href and '/news/' not in href and '/designers/' not in href:
                 
-                # מצאנו בושם! עכשיו ננסה לחלץ שם ומותג
                 full_link = "https://www.fragrantica.com" + href if not href.startswith('http') else href
                 
-                # בדרך כלל בתוך הלינק יש תמונה וטקסט. ננסה לחלץ בצורה חכמה.
+                # חילוץ שם הבושם
                 perfume_name = link.get_text(strip=True)
                 
-                # אם הלינק מכיל רק תמונה, נחפש את הטקסט בלינק שצמוד אליו או ב-alt של התמונה
-                img = link.find("img")
-                if not perfume_name and img and img.get('alt'):
-                    perfume_name = img['alt']
-                
-                # אם עדיין אין שם, נפרק את ה-URL
+                # אם אין טקסט בלינק, ננסה למצוא תמונה בתוכו (בדרך כלל בקרוסלה זה תמונה)
                 if not perfume_name:
-                    # מנסה לחלץ מתוך ה-URL: /perfume/Brand/Name-123.html
+                    img = link.find("img")
+                    if img and img.get('alt'):
+                        perfume_name = img['alt']
+                
+                # מנגנון חירום: חילוץ שם מתוך הלינק עצמו
+                if not perfume_name:
                     parts = href.split('/')
                     if len(parts) > 2:
                         raw_name = parts[-1].replace('.html', '')
-                        # מנקה את המספרים בסוף
                         perfume_name = re.sub(r'-\d+$', '', raw_name).replace('-', ' ')
 
+                # מחזיר את הראשון שנמצא (וזהו, יוצאים מהפונקציה)
                 return {
                     'title': perfume_name,
                     'link': full_link
@@ -109,10 +102,10 @@ def get_newest_perfume_from_homepage(soup):
         return None
 
 def main():
-    print("🚀 הבוט מתחיל בסריקת Homepage (מחפש בקבוקים חדשים)...")
+    print("🚀 הבוט מתחיל בסריקה (מצב חיפוש לינקים ישיר)...")
     
     try:
-        # שימוש ב-impersonate="chrome" כדי לעקוף את שגיאה 403
+        # הורדת העמוד
         response = requests.get(HOMEPAGE_URL, impersonate="chrome", timeout=20)
         
         if response.status_code != 200:
@@ -121,26 +114,30 @@ def main():
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # הדפסת הכותרת של העמוד כדי לוודא שאנחנו במקום הנכון
+        print(f"📄 כותרת העמוד שנסרק: {soup.title.string if soup.title else 'לא נמצאה כותרת'}")
+
         # הפעלת הלוגיקה החדשה
-        newest_perfume = get_newest_perfume_from_homepage(soup)
+        newest_perfume = get_first_perfume_on_page(soup)
         
         if not newest_perfume:
-            print("⚠️ לא הצלחתי למצוא בושם במדור 'New Perfumes'.")
+            print("⚠️ מוזר מאוד. לא מצאתי שום לינק לבושם בעמוד הבית.")
+            # הדפסת חלק מה-HTML לדיבוג (רק ה-500 תווים הראשונים) אם נכשל
+            # print(soup.prettify()[:500]) 
             return
 
         latest_title = newest_perfume['title']
         latest_link = newest_perfume['link']
         
-        print(f"👀 הבושם הכי חדש שראיתי בקרוסלה: {latest_title}")
+        print(f"👀 הבושם הראשון שנמצא: {latest_title}")
         
         last_seen = get_last_seen_link()
         
-        # אם הלינק שונה ממה ששמרנו פעם קודמת = בושם חדש נכנס לקרוסלה
         if latest_link != last_seen:
-            print("✨ בושם חדש זוהה! שולח התראה...")
+            print("✨ שינוי זוהה! שולח התראה...")
             
             msg_body = (
-                f"🎉 <b>בושם חדש עלה למאגר!</b><br>"
+                f"🎉 <b>בושם חדש (או שינוי בקרוסלה)!</b><br>"
                 f"שם: {latest_title}<br>"
             )
             
@@ -152,7 +149,7 @@ def main():
             
             save_last_seen_link(latest_link)
         else:
-            print("😴 אין חדש בקרוסלה.")
+            print("😴 זה אותו בושם כמו בפעם הקודמת.")
 
     except Exception as e:
         print(f"❌ קריסה כללית: {e}")
