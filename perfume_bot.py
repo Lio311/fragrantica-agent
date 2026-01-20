@@ -200,7 +200,7 @@ def main():
             if perfume['brand']:
                 msg_body = f"{perfume['brand']} - {perfume['name']}"
             else:
-                msg_body = f"New Perfume: {perfume['name']}"
+                msg_body = f"{perfume['name']}"
             
             send_pushover_image(
                 title=msg_title,
