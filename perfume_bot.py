@@ -198,7 +198,7 @@ def main():
             # עיצוב ההודעה עם מקף מפריד
             msg_title = "New Fragrance Alert"
             if perfume['brand']:
-                msg_body = f"New Perfume: {perfume['name']} - {perfume['brand']}"
+                msg_body = f"{perfume['brand']} - {perfume['name']}"
             else:
                 msg_body = f"New Perfume: {perfume['name']}"
             
