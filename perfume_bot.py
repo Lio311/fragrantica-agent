@@ -1,10 +1,11 @@
 import os
-from curl_cffi import requests as cffi_requests # לגלישה באתר (עקיפת חסימות)
-import requests # לשליחת התמונה ל-Pushover
-from bs4 import BeautifulSoup
+import time
+import random
 import sys
 import psycopg2 # לחיבור ל-Neon
-from urllib.parse import urlparse
+import requests # לשליחת התמונה ל-Pushover
+from curl_cffi import requests as cffi_requests # לגלישה באתר (עקיפת חסימות)
+from bs4 import BeautifulSoup
 
 # --- הגדרות ---
 HOMEPAGE_URL = "https://www.fragrantica.com/"
@@ -46,14 +47,13 @@ def send_pushover_image(title, message, image_url, url_link=None):
         print("❌ חסרים מפתחות Pushover.")
         return
 
-    # 1. הורדת התמונה מפרגרנטיקה (חייב להשתמש ב-cffi כדי לא להיחסם בהורדה)
+    # 1. הורדת התמונה מפרגרנטיקה
     files = {}
     try:
         if image_url:
             print(f"📸 מוריד תמונה: {image_url}")
             img_response = cffi_requests.get(image_url, impersonate="chrome", timeout=10)
             if img_response.status_code == 200:
-                # מכין את הקובץ לשליחה
                 files = {
                     "attachment": ("perfume.jpg", img_response.content, "image/jpeg")
                 }
@@ -76,7 +76,6 @@ def send_pushover_image(title, message, image_url, url_link=None):
         data["url_title"] = "Click to view on Fragrantica"
 
     try:
-        # שליחה ב-multipart/form-data בגלל התמונה
         response = requests.post(endpoint, data=data, files=files, timeout=20)
         if response.status_code == 200:
             print("✅ התראה נשלחה ל-Pushover (עם תמונה)!")
@@ -86,9 +85,8 @@ def send_pushover_image(title, message, image_url, url_link=None):
         print(f"❌ שגיאה בשליחה ל-Pushover: {e}")
 
 def check_db_exists(link):
-    """בודק אם הלינק כבר קיים ב-DB (במקום קובץ טקסט)"""
+    """בודק אם הלינק כבר קיים ב-DB"""
     if not DATABASE_URL:
-        # Fallback: אם אין DB, נשתמש בקובץ טקסט כמו קודם
         if os.path.exists("last_seen_perfume.txt"):
             with open("last_seen_perfume.txt", "r") as f:
                 return f.read().strip() == link
@@ -107,11 +105,8 @@ def check_db_exists(link):
         return False
 
 def get_latest_perfume_data(soup):
-    """
-    מנסה לחלץ בצורה חכמה: שם, מותג, תמונה ולינק מהקרוסלה
-    """
+    """חילוץ שם, מותג, תמונה ולינק - עם הפרדה טובה יותר"""
     try:
-        # אסטרטגיה: חיפוש הלינק הראשון שהוא בושם
         candidates = soup.find_all("a", href=True)
         
         for link in candidates:
@@ -121,26 +116,25 @@ def get_latest_perfume_data(soup):
                 
                 full_link = "https://www.fragrantica.com" + href if not href.startswith('http') else href
                 
-                # --- חילוץ נתונים ---
-                
-                # 1. תמונה (בדרך כלל נמצאת בתוך הלינק)
+                # --- חילוץ שם הבושם ---
                 img_tag = link.find("img")
                 image_url = img_tag['src'] if img_tag else None
                 
-                # 2. שם הבושם (בדרך כלל הטקסט מתחת לתמונה או ה-Alt)
-                perfume_name = link.get_text(strip=True)
-                if not perfume_name and img_tag and img_tag.get('alt'):
+                # עדיפות 1: לקחת את השם מתוך ה-ALT של התמונה (שם זה בדרך כלל נקי)
+                perfume_name = ""
+                if img_tag and img_tag.get('alt'):
                     perfume_name = img_tag['alt']
                 
-                # 3. שם המותג (החלק הטריקי)
-                # המותג נמצא בדרך כלל באלמנט שכן ("span" או "small") באותו קונטיינר של הלינק
-                brand_name = "Unknown Brand"
-                
-                # ניסיון למצוא את המותג ע"י הליכה "אחורה" ב-DOM או חיפוש בסביבה הקרובה
-                # בדרך כלל המבנה הוא: Cell -> Small(Brand) -> A(Name+Img)
-                parent_cell = link.find_parent("div") # מנסה למצוא את הקונטיינר
+                # עדיפות 2: אם אין ALT, לוקחים את הטקסט אבל נזהרים מהדבקות
+                if not perfume_name:
+                    # שימוש ב-separator כדי להבטיח רווח אם יש אלמנטים צמודים
+                    perfume_name = link.get_text(separator=" ", strip=True)
+
+                # --- חילוץ שם המותג ---
+                brand_name = ""
+                parent_cell = link.find_parent("div")
                 if parent_cell:
-                    # מחפש טקסט קטן או לינק למותג בתוך אותו תא
+                    # מנסה למצוא תגית small או span ליד הלינק
                     brand_candidate = parent_cell.find("small") or parent_cell.find("span")
                     if brand_candidate:
                         brand_name = brand_candidate.get_text(strip=True)
@@ -149,6 +143,10 @@ def get_latest_perfume_data(soup):
                         prev_link = link.find_previous_sibling("a")
                         if prev_link and '/designers/' in prev_link.get('href', ''):
                             brand_name = prev_link.get_text(strip=True)
+                
+                # ניקוי: אם שם הבושם בטעות מכיל את שם המותג בהתחלה (קורה לפעמים), נחתוך אותו
+                if brand_name and perfume_name.startswith(brand_name):
+                    perfume_name = perfume_name.replace(brand_name, "", 1).strip()
 
                 return {
                     'name': perfume_name,
@@ -156,7 +154,6 @@ def get_latest_perfume_data(soup):
                     'link': full_link,
                     'image': image_url
                 }
-                
         return None
 
     except Exception as e:
@@ -164,7 +161,15 @@ def get_latest_perfume_data(soup):
         return None
 
 def main():
-    print("🚀 מתחיל סריקה (DB + Image Mode)...")
+    # השהייה רנדומלית
+    sleep_seconds = random.randint(60, 600)
+    minutes = sleep_seconds // 60
+    seconds = sleep_seconds % 60
+    
+    print(f"⏳ הבוט נכנס להמתנה של {minutes} דקות ו-{seconds} שניות...")
+    time.sleep(sleep_seconds)
+    
+    print("🚀 מתעורר ומתחיל סריקה...")
     
     try:
         response = cffi_requests.get(HOMEPAGE_URL, impersonate="chrome", timeout=20)
@@ -173,30 +178,31 @@ def main():
             sys.exit(1)
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         perfume = get_latest_perfume_data(soup)
         
         if not perfume:
             print("⚠️ לא נמצא בושם בעמוד.")
             return
 
-        print(f"👀 נמצא: {perfume['name']} ({perfume['brand']})")
+        # הדפסה ללוג כדי לוודא שההפרדה עובדת
+        print(f"👀 נמצא: [בושם: {perfume['name']}] [מותג: {perfume['brand']}]")
         
-        # בדיקה האם הבושם כבר קיים ב-DB
         if check_db_exists(perfume['link']):
             print("😴 הבושם הזה כבר קיים ב-DB.")
         else:
             print("✨ בושם חדש! מבצע שמירה ושליחה...")
             
-            # 1. שמירה ל-DB
             save_to_db(perfume['name'], perfume['brand'], perfume['link'], perfume['image'])
             
-            # 2. הכנת הטקסט להתראה (בלי אימוג'ים, לפי הפורמט שביקשת)
-            # פורמט: New Perfume: שם הבושם (רווח) שם המותג
+            # בניית הודעה עם רווח יזום
             msg_title = "New Fragrance Alert"
-            msg_body = f"New Perfume: {perfume['name']} {perfume['brand']}"
             
-            # 3. שליחה ל-Pushover עם תמונה
+            # כאן התיקון הקריטי למחרוזת: אנחנו שמים רווח בכוח בין המשתנים
+            if perfume['brand']:
+                msg_body = f"New Perfume: {perfume['name']} - {perfume['brand']}"
+            else:
+                msg_body = f"New Perfume: {perfume['name']}"
+            
             send_pushover_image(
                 title=msg_title,
                 message=msg_body,
