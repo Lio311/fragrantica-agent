@@ -3,7 +3,7 @@ name: Fragrantica Pushover Bot
 on:
   schedule:
     # מריץ את הבוט כל שעה עגולה
-    - cron: '0 * * * *'
+    - cron: '0 */9 * * *' 
   
   # מאפשר הרצה ידנית
   workflow_dispatch:
