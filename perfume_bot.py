@@ -7,26 +7,27 @@ import requests
 from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
-# --- הגדרות ---
+# --- Configuration ---
 HOMEPAGE_URL = "https://www.fragrantica.com/"
 
-# רשימת מילים שהבוט עלול להתבלבל ולחשוב שהן מותג
+# List of words the bot might confuse for a brand
 INVALID_BRANDS = ["Latest Reviews", "New Reviews", "Fragrantica", "News", "Community"]
 
-# --- משתני סביבה ---
+# --- Environment Variables ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def save_to_db(name, brand, link, image_url):
-    """שומר בושם ב-DB"""
+    """Saves perfume to the DB"""
     if not DATABASE_URL:
-        print("⚠️ לא הוגדר DATABASE_URL.")
+        print("⚠️ DATABASE_URL not defined.")
         return
 
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        # Use ON CONFLICT to prevent crash if perfume already exists
         query = """
             INSERT INTO perfumes (name, brand, link, image_url)
             VALUES (%s, %s, %s, %s)
@@ -36,12 +37,12 @@ def save_to_db(name, brand, link, image_url):
         conn.commit()
         cur.close()
         conn.close()
-        print(f"💾 נשמר ב-DB: {name}")
+        print(f"💾 Saved to DB: {name}")
     except Exception as e:
-        print(f"❌ שגיאה בשמירה ל-DB: {e}")
+        print(f"❌ Error saving to DB: {e}")
 
 def send_pushover_image(title, message, image_url, url_link=None):
-    """שולח התראה עם תמונה"""
+    """Sends notification with an image"""
     if not PUSHOVER_USER_KEY or not PUSHOVER_API_TOKEN:
         return
 
@@ -54,7 +55,7 @@ def send_pushover_image(title, message, image_url, url_link=None):
                     "attachment": ("perfume.jpg", img_response.content, "image/jpeg")
                 }
     except Exception as e:
-        print(f"⚠️ שגיאה בהורדת תמונה: {e}")
+        print(f"⚠️ Error downloading image: {e}")
 
     endpoint = "https://api.pushover.net/1/messages.json"
     data = {
@@ -71,13 +72,14 @@ def send_pushover_image(title, message, image_url, url_link=None):
 
     try:
         requests.post(endpoint, data=data, files=files, timeout=20)
-        print("✅ התראה נשלחה!")
+        print("✅ Notification sent!")
     except Exception as e:
-        print(f"❌ שגיאה בשליחה ל-Pushover: {e}")
+        print(f"❌ Error sending to Pushover: {e}")
 
 def check_db_exists(link):
-    """בודק אם הלינק קיים ב-DB"""
+    """Checks if the link exists in the DB"""
     if not DATABASE_URL:
+        # Fallback to file if DB is missing
         if os.path.exists("last_seen_perfume.txt"):
             with open("last_seen_perfume.txt", "r") as f:
                 return f.read().strip() == link
@@ -92,12 +94,12 @@ def check_db_exists(link):
         conn.close()
         return exists
     except Exception as e:
-        print(f"⚠️ שגיאה בבדיקת DB: {e}")
+        print(f"⚠️ Error checking DB: {e}")
         return False
 
 def get_perfumes_list(soup):
     """
-    סורק את העמוד ומחזיר רשימה של עד 40 בשמים ייחודיים
+    Scans the page and returns a list of up to 40 unique perfumes
     """
     perfumes_found = []
     seen_links = set()
@@ -108,7 +110,7 @@ def get_perfumes_list(soup):
         for link in candidates:
             href = link['href']
             
-            # סינון: לינק לבושם בלבד
+            # Filter: Perfume links only
             if '/perfume/' in href and '.html' in href and '/news/' not in href and '/designers/' not in href:
                 
                 full_link = "https://www.fragrantica.com" + href if not href.startswith('http') else href
@@ -116,11 +118,11 @@ def get_perfumes_list(soup):
                 if full_link in seen_links:
                     continue
 
-                # --- חילוץ נתונים ---
+                # --- Data Extraction ---
                 img_tag = link.find("img")
                 image_url = img_tag['src'] if img_tag else None
                 
-                # חילוץ שם (עדיפות ל-ALT)
+                # Extract Name (Priority to ALT)
                 perfume_name = ""
                 if img_tag and img_tag.get('alt'):
                     perfume_name = img_tag['alt']
@@ -128,11 +130,11 @@ def get_perfumes_list(soup):
                 if not perfume_name:
                     perfume_name = link.get_text(separator=" ", strip=True)
                 
-                # הסרת המילה "perfume" מההתחלה
+                # Remove the word "perfume" from the beginning
                 if perfume_name.lower().startswith("perfume"):
                     perfume_name = perfume_name[7:].strip()
 
-                # --- חילוץ מותג ---
+                # --- Extract Brand ---
                 brand_name = ""
                 parent_cell = link.find_parent("div")
                 if parent_cell:
@@ -144,17 +146,17 @@ def get_perfumes_list(soup):
                         if prev_link and '/designers/' in prev_link.get('href', ''):
                             brand_name = prev_link.get_text(strip=True)
                 
-                # === התיקון החדש: סינון מותגים שגויים ===
-                # אם המותג הוא "Latest Reviews", אנחנו מאפסים אותו
+                # === New Fix: Filter invalid brands ===
+                # If the brand is "Latest Reviews", reset it
                 if brand_name in INVALID_BRANDS:
                     brand_name = "" 
                 
-                # אם אתה מעדיף לא לשמור בכלל בשמים שמגיעים מאזור הביקורות,
-                # תוריד את ההערה מהשורות הבאות:
+                # If you prefer not to save perfumes from the reviews section at all,
+                # uncomment the following lines:
                 # if brand_name == "":
                 #    continue
 
-                # ניקוי כפילות מותג בתוך השם
+                # Clean brand duplication within the name
                 if brand_name and perfume_name.lower().startswith(brand_name.lower()):
                     perfume_name = perfume_name[len(brand_name):].strip()
 
@@ -174,26 +176,26 @@ def get_perfumes_list(soup):
         return perfumes_found
 
     except Exception as e:
-        print(f"❌ שגיאה בניתוח ה-HTML: {e}")
+        print(f"❌ HTML parsing error: {e}")
         return []
 
 def main():
     sleep_seconds = random.randint(10, 50)
-    print(f"⏳ ממתין {sleep_seconds} שניות...")
+    print(f"⏳ Waiting {sleep_seconds} seconds...")
     time.sleep(sleep_seconds)
     
-    print("🚀 מתחיל סריקה (מסנן Latest Reviews)...")
+    print("🚀 Starting scan (filtering Latest Reviews)...")
     
     try:
         response = cffi_requests.get(HOMEPAGE_URL, impersonate="chrome", timeout=20)
         if response.status_code != 200:
-            print(f"❌ שגיאה: {response.status_code}")
+            print(f"❌ Error: {response.status_code}")
             sys.exit(1)
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
         all_perfumes = get_perfumes_list(soup)
-        print(f"🔎 נמצאו {len(all_perfumes)} בשמים פוטנציאליים.")
+        print(f"🔎 Found {len(all_perfumes)} potential perfumes.")
         
         new_count = 0
         
@@ -201,14 +203,14 @@ def main():
             if check_db_exists(perfume['link']):
                 continue
             
-            # לוגיקה לתצוגת שם המותג בהודעה
+            # Logic for displaying brand name in the message
             display_text = ""
             if perfume['brand']:
                 display_text = f"{perfume['brand']} - {perfume['name']}"
             else:
                 display_text = f"{perfume['name']}"
 
-            print(f"✨ חדש! {display_text}")
+            print(f"✨ New! {display_text}")
             
             save_to_db(perfume['name'], perfume['brand'], perfume['link'], perfume['image'])
             
@@ -223,12 +225,12 @@ def main():
             time.sleep(1)
 
         if new_count == 0:
-            print("😴 לא נמצאו בשמים חדשים.")
+            print("😴 No new perfumes found.")
         else:
-            print(f"🎉 נוספו {new_count} בשמים.")
+            print(f"🎉 Added {new_count} perfumes.")
 
     except Exception as e:
-        print(f"❌ קריסה: {e}")
+        print(f"❌ Crash: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
