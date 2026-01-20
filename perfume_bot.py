@@ -10,6 +10,9 @@ from bs4 import BeautifulSoup
 # --- הגדרות ---
 HOMEPAGE_URL = "https://www.fragrantica.com/"
 
+# רשימת מילים שהבוט עלול להתבלבל ולחשוב שהן מותג
+INVALID_BRANDS = ["Latest Reviews", "New Reviews", "Fragrantica", "News", "Community"]
+
 # --- משתני סביבה ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
@@ -45,7 +48,6 @@ def send_pushover_image(title, message, image_url, url_link=None):
     files = {}
     try:
         if image_url:
-            # מוריד את התמונה לזכרון
             img_response = cffi_requests.get(image_url, impersonate="chrome", timeout=10)
             if img_response.status_code == 200:
                 files = {
@@ -76,7 +78,6 @@ def send_pushover_image(title, message, image_url, url_link=None):
 def check_db_exists(link):
     """בודק אם הלינק קיים ב-DB"""
     if not DATABASE_URL:
-        # Fallback לקובץ אם אין DB
         if os.path.exists("last_seen_perfume.txt"):
             with open("last_seen_perfume.txt", "r") as f:
                 return f.read().strip() == link
@@ -99,7 +100,7 @@ def get_perfumes_list(soup):
     סורק את העמוד ומחזיר רשימה של עד 40 בשמים ייחודיים
     """
     perfumes_found = []
-    seen_links = set() # למנוע כפילויות בתוך אותה ריצה
+    seen_links = set()
 
     try:
         candidates = soup.find_all("a", href=True)
@@ -112,7 +113,6 @@ def get_perfumes_list(soup):
                 
                 full_link = "https://www.fragrantica.com" + href if not href.startswith('http') else href
                 
-                # אם כבר אספנו את הלינק הזה בריצה הזו, מדלגים
                 if full_link in seen_links:
                     continue
 
@@ -128,10 +128,8 @@ def get_perfumes_list(soup):
                 if not perfume_name:
                     perfume_name = link.get_text(separator=" ", strip=True)
                 
-                # --- תיקון: הסרת המילה "perfume" ---
-                # מנקה רווחים כפולים ומילים מיותרות
+                # הסרת המילה "perfume" מההתחלה
                 if perfume_name.lower().startswith("perfume"):
-                    # מוחק את ה-7 תווים הראשונים ("perfume") ואת הרווחים שאחרי
                     perfume_name = perfume_name[7:].strip()
 
                 # --- חילוץ מותג ---
@@ -146,11 +144,20 @@ def get_perfumes_list(soup):
                         if prev_link and '/designers/' in prev_link.get('href', ''):
                             brand_name = prev_link.get_text(strip=True)
                 
+                # === התיקון החדש: סינון מותגים שגויים ===
+                # אם המותג הוא "Latest Reviews", אנחנו מאפסים אותו
+                if brand_name in INVALID_BRANDS:
+                    brand_name = "" 
+                
+                # אם אתה מעדיף לא לשמור בכלל בשמים שמגיעים מאזור הביקורות,
+                # תוריד את ההערה מהשורות הבאות:
+                # if brand_name == "":
+                #    continue
+
                 # ניקוי כפילות מותג בתוך השם
                 if brand_name and perfume_name.lower().startswith(brand_name.lower()):
                     perfume_name = perfume_name[len(brand_name):].strip()
 
-                # הוספה לרשימה
                 perfume_data = {
                     'name': perfume_name,
                     'brand': brand_name,
@@ -161,7 +168,6 @@ def get_perfumes_list(soup):
                 perfumes_found.append(perfume_data)
                 seen_links.add(full_link)
                 
-                # הגבלה ל-40 בשמים כדי לא להעמיס
                 if len(perfumes_found) >= 40:
                     break
         
@@ -172,12 +178,11 @@ def get_perfumes_list(soup):
         return []
 
 def main():
-    # המתנה קצרה כדי לא להיחסם (10-50 שניות)
     sleep_seconds = random.randint(10, 50)
     print(f"⏳ ממתין {sleep_seconds} שניות...")
     time.sleep(sleep_seconds)
     
-    print("🚀 מתחיל סריקה של כל הקרוסלה (עד 40 בשמים)...")
+    print("🚀 מתחיל סריקה (מסנן Latest Reviews)...")
     
     try:
         response = cffi_requests.get(HOMEPAGE_URL, impersonate="chrome", timeout=20)
@@ -187,49 +192,40 @@ def main():
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # שלב 1: איסוף כל הבשמים מהעמוד
         all_perfumes = get_perfumes_list(soup)
-        
-        print(f"🔎 נמצאו {len(all_perfumes)} בשמים פוטנציאליים בעמוד.")
+        print(f"🔎 נמצאו {len(all_perfumes)} בשמים פוטנציאליים.")
         
         new_count = 0
         
-        # שלב 2: מעבר על הרשימה ובדיקה מול ה-DB
         for perfume in all_perfumes:
-            
             if check_db_exists(perfume['link']):
-                # קיים ב-DB - מדלגים בשקט
                 continue
             
-            # אם הגענו לפה - זה בושם חדש!
-            print(f"✨ חדש! {perfume['brand']} - {perfume['name']}")
+            # לוגיקה לתצוגת שם המותג בהודעה
+            display_text = ""
+            if perfume['brand']:
+                display_text = f"{perfume['brand']} - {perfume['name']}"
+            else:
+                display_text = f"{perfume['name']}"
+
+            print(f"✨ חדש! {display_text}")
             
-            # שמירה
             save_to_db(perfume['name'], perfume['brand'], perfume['link'], perfume['image'])
             
-            # בניית הודעה (מותג - שם)
-            msg_title = "New Fragrance Alert"
-            if perfume['brand']:
-                msg_body = f"{perfume['brand']} - {perfume['name']}"
-            else:
-                msg_body = f"{perfume['name']}"
-            
-            # שליחה
             send_pushover_image(
-                title=msg_title,
-                message=msg_body,
+                title="New Fragrance Alert",
+                message=display_text,
                 image_url=perfume['image'],
                 url_link=perfume['link']
             )
             
             new_count += 1
-            # המתנה קטנטנה בין שליחות כדי לא להציף את Pushover אם יש הרבה
             time.sleep(1)
 
         if new_count == 0:
-            print("😴 לא נמצאו בשמים חדשים שלא קיימים ב-DB.")
+            print("😴 לא נמצאו בשמים חדשים.")
         else:
-            print(f"🎉 סה\"כ נוספו {new_count} בשמים חדשים.")
+            print(f"🎉 נוספו {new_count} בשמים.")
 
     except Exception as e:
         print(f"❌ קריסה: {e}")
